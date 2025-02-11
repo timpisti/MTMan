@@ -17,8 +17,15 @@ Thread Management
 - Configurable thread limits
 - Automatic thread cleanup
 - Process status monitoring
+## Requirements
+PHP 8.3+
+PCNTL extension
+Optional: SMBus for enhanced IPC
+
 ## Basic Usage
 ```php
+use MTMan\MTMan;
+
 $mtman = new MTMan(['threads_count' => 4]);
 
 // Add parallel tasks
@@ -44,6 +51,25 @@ $config = [
 
 $mtman = new MTMan($config);
 ```
+
+## Monitoring
+```php
+// Get thread status
+$status = $mtman->getThreadStatus();
+
+// Sample log output
+{
+    "timestamp": "2024-02-11T15:30:00",
+    "process_id": 12345,
+    "thread_id": 2,
+    "status": "completed",
+    "execution_time": 1.23,
+    "memory_peak": "2.5MB"
+}
+```
+
+## Check example from browser
+...to get fancy-handy informations about the current processes.
 
 ### License
 MIT License - see LICENSE file for details.
