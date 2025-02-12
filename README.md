@@ -68,8 +68,11 @@ $status = $mtman->getThreadStatus();
 }
 ```
 
-## Check example from browser
-...to get fancy-handy informations about the current processes.
+## Check example dir content from browser
+...to get fancy-handy informations about the current processes
+
+## If look like everything is working from browser, but the output is null
+Your server forbid PCNTL functions in FPM mode. Check the example directory for solution to calling MTMan in CLI mode.
 
 ### License
 MIT License - see LICENSE file for details.
