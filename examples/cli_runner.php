@@ -51,9 +51,62 @@ try {
         }
     ]);
 
-    // Add tasks
+    // Add tasks safely without eval()
     foreach ($input['tasks'] as $task) {
-        $mtman->addTask(eval('return ' . $task . ';'));
+        $taskType = $task['type'] ?? 'simple';
+        $taskId = $task['id'] ?? 0;
+        
+        switch ($taskType) {
+            case 'sleep':
+                $mtman->addTask(function() use ($taskId) {
+                    $sleepTime = random_int(1, 3);
+                    sleep($sleepTime);
+                    return [
+                        "task_id" => $taskId,
+                        "pid" => getmypid(),
+                        "sleep_time" => $sleepTime,
+                        "time" => microtime(true)
+                    ];
+                });
+                break;
+            case 'cpu':
+                $mtman->addTask(function() use ($taskId) {
+                    $start = microtime(true);
+                    $result = 0;
+                    for ($j = 0; $j < 100000; $j++) {
+                        $result += sin($j);
+                    }
+                    return [
+                        "task_id" => $taskId,
+                        "pid" => getmypid(),
+                        "calculation_time" => microtime(true) - $start,
+                        "time" => microtime(true)
+                    ];
+                });
+                break;
+            case 'error':
+                $mtman->addTask(function() use ($taskId) {
+                    if (random_int(0, 1)) {
+                        throw new Exception("Random error in task " . $taskId);
+                    }
+                    return [
+                        "task_id" => $taskId,
+                        "pid" => getmypid(),
+                        "status" => "success",
+                        "time" => microtime(true)
+                    ];
+                });
+                break;
+            default: // simple
+                $mtman->addTask(function() use ($taskId) {
+                    return [
+                        "task_id" => $taskId,
+                        "pid" => getmypid(),
+                        "time" => microtime(true)
+                    ];
+                });
+                break;
+        }
     }
 
     // Run tasks

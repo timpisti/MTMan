@@ -13,63 +13,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'run') {
         $taskCount = (int)($_POST['task_count'] ?? 3);
         $threadCount = (int)($_POST['thread_count'] ?? 2);
 
-        // Build tasks based on type
+        // Build tasks based on type safely using structured array data
         $tasks = [];
         for ($i = 0; $i < $taskCount; $i++) {
-            switch ($taskType) {
-                case 'sleep':
-                    $tasks[] = 'function() { 
-                        $sleepTime = random_int(1, 3);
-                        sleep($sleepTime);
-                        return [
-                            "task_id" => ' . $i . ',
-                            "pid" => getmypid(),
-                            "sleep_time" => $sleepTime,
-                            "time" => microtime(true)
-                        ];
-                    }';
-                    break;
-
-                case 'cpu':
-                    $tasks[] = 'function() {
-                        $start = microtime(true);
-                        $result = 0;
-                        for ($j = 0; $j < 100000; $j++) {
-                            $result += sin($j);
-                        }
-                        return [
-                            "task_id" => ' . $i . ',
-                            "pid" => getmypid(),
-                            "calculation_time" => microtime(true) - $start,
-                            "time" => microtime(true)
-                        ];
-                    }';
-                    break;
-
-                case 'error':
-                    $tasks[] = 'function() {
-                        if (random_int(0, 1)) {
-                            throw new Exception("Random error in task ' . $i . '");
-                        }
-                        return [
-                            "task_id" => ' . $i . ',
-                            "pid" => getmypid(),
-                            "status" => "success",
-                            "time" => microtime(true)
-                        ];
-                    }';
-                    break;
-
-                default: // simple
-                    $tasks[] = 'function() {
-                        return [
-                            "task_id" => ' . $i . ',
-                            "pid" => getmypid(),
-                            "time" => microtime(true)
-                        ];
-                    }';
-                    break;
-            }
+            $tasks[] = [
+                'type' => $taskType,
+                'id' => $i
+            ];
         }
         
         // Prepare input for CLI script

@@ -8,15 +8,13 @@ class ResultStorage
 {
     private string $tempDir;
     private string $prefix;
-    private static string $sharedPrefix;
+    private int $ownerPid;
 
     public function __construct(string $tempDir)
     {
         $this->tempDir = $tempDir;
-        if (!isset(self::$sharedPrefix)) {
-            self::$sharedPrefix = uniqid('mtman_', true);
-        }
-        $this->prefix = self::$sharedPrefix;
+        $this->ownerPid = getmypid();
+        $this->prefix = uniqid('mtman_' . $this->ownerPid . '_', true);
         
         if (!is_dir($this->tempDir)) {
             if (!mkdir($this->tempDir, 0777, true)) {
@@ -42,14 +40,22 @@ class ResultStorage
         if (!file_exists($file)) {
             return null;
         }
-        return unserialize(file_get_contents($file));
+        return unserialize(file_get_contents($file), ['allowed_classes' => false]);
     }
 
     public function cleanup(): void
     {
+        if (getmypid() !== $this->ownerPid) {
+            return;
+        }
         foreach (glob("{$this->tempDir}/{$this->prefix}_*.dat") as $file) {
             @unlink($file);
         }
+    }
+
+    public function __destruct()
+    {
+        $this->cleanup();
     }
 
     private function getFilePath(int $taskId): string

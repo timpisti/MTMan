@@ -55,81 +55,117 @@ class MTMan
 		$running = [];
 		$pendingTasks = $this->tasks;
 
-		while (!empty($pendingTasks) || !empty($running)) {
-			$this->checkTimeout($startTime);
-			
-			// Start new tasks
-			while (count($running) < $this->config['threads_count'] && !empty($pendingTasks)) {
-				$taskId = array_key_first($pendingTasks);
-				$task = $pendingTasks[$taskId];
-				
-				$this->logger->log("Forking for task $taskId", 'DEBUG');
-				$pid = pcntl_fork();
-				
-				if ($pid === -1) {
-					throw new MTManException('Fork failed');
-				}
-				
-				if ($pid === 0) { // Child process
-					try {
-						$this->logger->log("Child process started for task $taskId", 'DEBUG');
-						$result = ($task['function'])(...$task['params']);
-						$this->logger->log("Task $taskId completed, storing result", 'DEBUG');
-						$this->storage->store($taskId, $result);
-						$this->logger->log("Result stored for task $taskId", 'DEBUG');
-						exit(0);
-					} catch (\Throwable $e) {
-						$this->logger->log("Task $taskId failed: " . $e->getMessage(), 'ERROR');
-						exit(1);
-					}
-				}
-				
-				// Parent process continues
-				$running[$pid] = $taskId;
-				unset($pendingTasks[$taskId]);
-				$this->threadStatus[$pid] = 'RUNNING';
-				$this->logger->log("Parent: Started task $taskId with PID $pid", 'DEBUG');
-			}
-			
-			// Check completed tasks
-			foreach ($running as $pid => $taskId) {
-				$status = pcntl_waitpid($pid, $exitStatus, WNOHANG);
-				
-				if ($status === $pid) {
-					$this->logger->log("Process $pid completed with status " . pcntl_wexitstatus($exitStatus), 'DEBUG');
-					
-					if (pcntl_wexitstatus($exitStatus) === 0) {
-						$this->logger->log("Attempting to retrieve result for task $taskId", 'DEBUG');
-						$result = $this->storage->get($taskId);
-						
-						if ($result !== null) {
-							$this->logger->log("Retrieved result for task $taskId", 'DEBUG');
-							$results[$taskId] = $result;
-							$this->threadStatus[$pid] = 'COMPLETED';
-						} else {
-							$this->logger->log("No result found for task $taskId", 'WARNING');
-						}
-					} else {
-						$this->handleFailedTask($taskId, $pendingTasks);
-						$this->threadStatus[$pid] = 'FAILED';
-					}
-					unset($running[$pid]);
-				}
-			}
-			
-			usleep(1000);
+		// Register signal handlers for graceful shutdown on Linux
+		$hasPcntl = extension_loaded('pcntl');
+		if ($hasPcntl) {
+			pcntl_async_signals(true);
+			$sigHandler = function ($signo) {
+				$this->logger->log("Received signal $signo, terminating all threads...", 'WARNING');
+				$this->terminateAllThreads();
+				exit(128 + $signo);
+			};
+			pcntl_signal(SIGINT, $sigHandler);
+			pcntl_signal(SIGTERM, $sigHandler);
 		}
 
-		// Wait for any remaining processes
-		foreach ($running as $pid => $taskId) {
-			pcntl_waitpid($pid, $exitStatus);
-			$this->logger->log("Final wait: Process $pid completed", 'DEBUG');
-			
-			if (pcntl_wexitstatus($exitStatus) === 0) {
-				$result = $this->storage->get($taskId);
-				if ($result !== null) {
-					$results[$taskId] = $result;
+		try {
+			while (!empty($pendingTasks) || !empty($running)) {
+				$this->checkTimeout($startTime);
+				
+				// Start new tasks
+				while (count($running) < $this->config['threads_count'] && !empty($pendingTasks)) {
+					$taskId = array_key_first($pendingTasks);
+					$task = $pendingTasks[$taskId];
+					
+					$this->logger->log("Forking for task $taskId", 'DEBUG');
+					$pid = pcntl_fork();
+					
+					if ($pid === -1) {
+						throw new MTManException('Fork failed');
+					}
+					
+					if ($pid === 0) { // Child process
+						try {
+							$this->logger->log("Child process started for task $taskId", 'DEBUG');
+							$result = ($task['function'])(...$task['params']);
+							$this->logger->log("Task $taskId completed, storing result", 'DEBUG');
+							$this->storage->store($taskId, $result);
+							$this->logger->log("Result stored for task $taskId", 'DEBUG');
+							exit(0);
+						} catch (\Throwable $e) {
+							$this->logger->log("Task $taskId failed: " . $e->getMessage(), 'ERROR');
+							exit(1);
+						}
+					}
+					
+					// Parent process continues
+					$running[$pid] = $taskId;
+					unset($pendingTasks[$taskId]);
+					$this->threadStatus[$pid] = 'RUNNING';
+					$this->logger->log("Parent: Started task $taskId with PID $pid", 'DEBUG');
+					if (isset($this->config['on_task_start']) && is_callable($this->config['on_task_start'])) {
+						try {
+							($this->config['on_task_start'])($taskId);
+						} catch (\Throwable $cbEx) {
+							$this->logger->log("Callback on_task_start error: " . $cbEx->getMessage(), 'WARNING');
+						}
+					}
 				}
+				
+				// Check completed tasks
+				foreach ($running as $pid => $taskId) {
+					$status = pcntl_waitpid($pid, $exitStatus, WNOHANG);
+					
+					if ($status === $pid) {
+						$exitCode = -1;
+						$exitedNormally = pcntl_wifexited($exitStatus);
+						$isSignaled = pcntl_wifsignaled($exitStatus);
+						
+						if ($exitedNormally) {
+							$exitCode = pcntl_wexitstatus($exitStatus);
+							$this->logger->log("Process $pid completed with status $exitCode", 'DEBUG');
+						} else if ($isSignaled) {
+							$termsig = pcntl_wtermsig($exitStatus);
+							$this->logger->log("Process $pid terminated by signal $termsig", 'WARNING');
+						} else {
+							$this->logger->log("Process $pid stopped or finished abnormally", 'WARNING');
+						}
+						
+						if ($exitedNormally && $exitCode === 0) {
+							$this->logger->log("Attempting to retrieve result for task $taskId", 'DEBUG');
+							$result = $this->storage->get($taskId);
+							
+							if ($result !== null) {
+								$this->logger->log("Retrieved result for task $taskId", 'DEBUG');
+								$results[$taskId] = $result;
+								$this->threadStatus[$pid] = 'COMPLETED';
+								
+								if (isset($this->config['on_task_complete']) && is_callable($this->config['on_task_complete'])) {
+									try {
+										($this->config['on_task_complete'])($taskId, $result);
+									} catch (\Throwable $cbEx) {
+										$this->logger->log("Callback on_task_complete error: " . $cbEx->getMessage(), 'WARNING');
+									}
+								}
+							} else {
+								$this->logger->log("No result found for task $taskId", 'WARNING');
+							}
+						} else {
+							$errMsg = $exitedNormally ? "Process exited with status $exitCode" : ($isSignaled ? "Process terminated by signal $termsig" : "Abnormal termination");
+							$this->handleFailedTask($taskId, $pendingTasks, $errMsg);
+							$this->threadStatus[$pid] = 'FAILED';
+						}
+						unset($running[$pid]);
+					}
+				}
+				
+				usleep(1000);
+			}
+		} finally {
+			// Restore default signal handlers
+			if ($hasPcntl) {
+				pcntl_signal(SIGINT, SIG_DFL);
+				pcntl_signal(SIGTERM, SIG_DFL);
 			}
 		}
 
@@ -145,7 +181,7 @@ class MTMan
         }
     }
 
-    private function handleFailedTask(int $taskId, array &$pendingTasks): void
+    private function handleFailedTask(int $taskId, array &$pendingTasks, string $errorMessage): void
     {
         if (!isset($this->tasks[$taskId]['retries'])) {
             $this->tasks[$taskId]['retries'] = 0;
@@ -155,7 +191,7 @@ class MTMan
             $this->tasks[$taskId]['retries']++;
             $pendingTasks[$taskId] = $this->tasks[$taskId];
             $this->logger->log(
-                "Task $taskId failed, scheduling retry {$this->tasks[$taskId]['retries']}/{$this->config['max_retries']}", 
+                "Task $taskId failed ($errorMessage), scheduling retry {$this->tasks[$taskId]['retries']}/{$this->config['max_retries']}", 
                 'WARNING'
             );
             
@@ -163,9 +199,17 @@ class MTMan
             usleep(100000); // 100ms delay
         } else {
             $this->logger->log(
-                "Task $taskId failed permanently after {$this->tasks[$taskId]['retries']} retries", 
+                "Task $taskId failed permanently after {$this->tasks[$taskId]['retries']} retries. Error: $errorMessage", 
                 'ERROR'
             );
+            
+            if (isset($this->config['on_task_error']) && is_callable($this->config['on_task_error'])) {
+                try {
+                    ($this->config['on_task_error'])($taskId, $errorMessage);
+                } catch (\Throwable $cbEx) {
+                    $this->logger->log("Callback on_task_error error: " . $cbEx->getMessage(), 'WARNING');
+                }
+            }
         }
     }
 

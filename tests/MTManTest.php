@@ -189,4 +189,73 @@ class MTManTest extends TestCase
         $this->assertNotEmpty($status);
         $this->assertContains('COMPLETED', $status);
     }
+
+    public function testLifecycleCallbacks(): void
+    {
+        $started = [];
+        $completed = [];
+        $failed = [];
+
+        $mtman = new MTMan([
+            'threads_count' => 1,
+            'max_retries' => 0,
+            'temp_dir' => $this->tempDir,
+            'on_task_start' => function($taskId) use (&$started) {
+                $started[] = $taskId;
+            },
+            'on_task_complete' => function($taskId, $result) use (&$completed) {
+                $completed[] = [$taskId, $result];
+            },
+            'on_task_error' => function($taskId, $error) use (&$failed) {
+                $failed[] = [$taskId, $error];
+            }
+        ]);
+
+        $mtman->addTask(function() {
+            return "success_val";
+        });
+
+        $mtman->addTask(function() {
+            throw new \Exception("failure_val");
+        });
+
+        $mtman->run();
+
+        $this->assertCount(2, $started);
+        $this->assertCount(1, $completed);
+        $this->assertCount(1, $failed);
+        
+        $this->assertEquals(0, $completed[0][0]);
+        $this->assertEquals("success_val", $completed[0][1]);
+        
+        $this->assertEquals(1, $failed[0][0]);
+        $this->assertStringContainsString("Process exited with status 1", $failed[0][1]);
+    }
+
+    public function testResultStorageOwnerPidGuard(): void
+    {
+        $storage = new \MTMan\Storage\ResultStorage($this->tempDir);
+        $storage->store(123, "test_data");
+        
+        // Use reflection to change the ownerPid to a dummy PID, simulating a child process
+        $reflection = new \ReflectionClass($storage);
+        $property = $reflection->getProperty('ownerPid');
+        $property->setAccessible(true);
+        $property->setValue($storage, getmypid() + 9999);
+        
+        // Try to clean up from the fake child process
+        $storage->cleanup();
+        
+        // Assert that the file is NOT deleted (since the PID did not match)
+        $refMethod = $reflection->getMethod('getFilePath');
+        $refMethod->setAccessible(true);
+        $filePath = $refMethod->invoke($storage, 123);
+        
+        $this->assertFileExists($filePath);
+        
+        // Reset ownerPid back to actual PID to allow teardown/cleanup
+        $property->setValue($storage, getmypid());
+        $storage->cleanup();
+        $this->assertFileDoesNotExist($filePath);
+    }
 }
