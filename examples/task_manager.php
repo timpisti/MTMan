@@ -6,7 +6,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'run') {
     
     try {
         $tempDir = dirname(__DIR__) . '/temp/test_' . uniqid();
-        mkdir($tempDir, 0777, true);
+        mkdir($tempDir, 0700, true);
 
         // Get parameters
         $taskType = $_POST['task_type'] ?? 'simple';
@@ -24,7 +24,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'run') {
         
         // Prepare input for CLI script
         $input = [
-            'threads_count' => $threadCount,
+            'max_processes' => $threadCount,
             'time_limit' => 30,
             'temp_dir' => $tempDir,
             'tasks' => $tasks

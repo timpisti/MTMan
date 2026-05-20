@@ -4,50 +4,46 @@ namespace MTMan\Logger;
 
 class Logger
 {
+    private const LEVELS = ['DEBUG' => 0, 'INFO' => 1, 'WARNING' => 2, 'ERROR' => 3];
+
     private string $logDir;
-    private string $logLevel;
+    private int $minLevel;
     private string $execId;
+    private int $ownerPid;
 
     public function __construct(string $logDir, string $logLevel = 'INFO')
     {
-        $this->logDir = rtrim($logDir, '/');
-        $this->logLevel = strtoupper($logLevel);
-        $this->execId = uniqid('exec_', true);
-        
+        $this->logDir = rtrim($logDir, '/\\');
+        $this->minLevel = self::LEVELS[strtoupper($logLevel)] ?? self::LEVELS['INFO'];
+        $this->execId = 'exec_' . bin2hex(random_bytes(8));
+        $this->ownerPid = getmypid();
+
         if (!is_dir($this->logDir)) {
-            mkdir($this->logDir, 0755, true);
+            mkdir($this->logDir, 0700, true);
         }
     }
 
-    public function log(string $message, string $level = 'INFO', ?int $pid = null): void
+    public function log(string $message, string $level = 'INFO'): void
     {
-        if ($this->shouldLog($level)) {
-            $logEntry = [
-                'timestamp' => microtime(true),
-                'pid' => $pid ?? getmypid(),
-                'level' => $level,
-                'message' => $message
-            ];
-
-            // Per-execution log
-            file_put_contents(
-                "{$this->logDir}/{$this->execId}.log",
-                json_encode($logEntry) . "\n",
-                FILE_APPEND
-            );
-
-            // Overall log
-            file_put_contents(
-                "{$this->logDir}/mtman.log",
-                json_encode($logEntry) . "\n",
-                FILE_APPEND
-            );
+        $levelValue = self::LEVELS[strtoupper($level)] ?? null;
+        if ($levelValue === null || $levelValue < $this->minLevel) {
+            return;
         }
+
+        $entry = json_encode([
+            'timestamp' => microtime(true),
+            'pid' => getmypid(),
+            'level' => $level,
+            'message' => $message,
+        ], JSON_UNESCAPED_UNICODE) . "\n";
+
+        // LOCK_EX prevents interleaved writes from concurrent forked processes
+        file_put_contents("{$this->logDir}/{$this->execId}.log", $entry, FILE_APPEND | LOCK_EX);
+        file_put_contents("{$this->logDir}/mtman.log", $entry, FILE_APPEND | LOCK_EX);
     }
 
-    private function shouldLog(string $level): bool
+    public function getExecId(): string
     {
-        $levels = ['DEBUG' => 0, 'INFO' => 1, 'WARNING' => 2, 'ERROR' => 3];
-        return $levels[$level] >= $levels[$this->logLevel];
+        return $this->execId;
     }
 }
